@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -24,8 +22,13 @@ func loadBooks() error {
 	if err != nil {
 		return err
 	}
-	data, _ := ioutil.ReadAll(file)
-	json.Unmarshal(data, &books)
+	defer file.Close()
+
+	err = json.NewDecoder(file).Decode(&books)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -48,32 +51,123 @@ func saveBooks() error {
 
 }
 
-func getBooks(w http.ResponseWriter, r *http.Request) {
+func getAllBooks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(books)
 }
 
 func getBook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+	idStr := r.URL.Path[len("/books/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
 	for _, book := range books {
 		if book.ID == id {
 			json.NewEncoder(w).Encode(book)
 			return
 		}
 	}
-	http.Error(w, "Book not found", http.StatusNotFound)
+
+	http.Error(w, "Kitob topilmadi", http.StatusNotFound)
+}
+
+func addBook(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var newBook Book
+	err := json.NewDecoder(r.Body).Decode(&newBook)
+	if err != nil {
+		http.Error(w, "Malumotlarni o'qib bo'lmadi", http.StatusBadRequest)
+		return
+	}
+
+	books = append(books, newBook)
+	err = saveBooks()
+	if err != nil {
+		http.Error(w, "Kitob qo'shilmadi", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newBook)
+}
+
+func updateBook(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	idStr := r.URL.Path[len("/books/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	var updatedBook Book
+	err = json.NewDecoder(r.Body).Decode(&updatedBook)
+	if err != nil {
+		http.Error(w, "Malumotlarni o'qib bo'lmadi", http.StatusBadRequest)
+		return
+	}
+
+	for i, book := range books {
+		if book.ID == id {
+			books[i] = updatedBook
+			err = saveBooks()
+			if err != nil {
+				http.Error(w, "Kitob yangilanmadi", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(updatedBook)
+			return
+		}
+	}
+
+	http.Error(w, "Kitob topilmadi", http.StatusNotFound)
+}
+
+func deleteBook(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	idStr := r.URL.Path[len("/books/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	for i, book := range books {
+		if book.ID == id {
+			books = append(books[:i], books[i+1:]...)
+			err = saveBooks()
+			if err != nil {
+				http.Error(w, "Kitob o'chirilmadi", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(book)
+			return
+		}
+	}
+
+	http.Error(w, "Kitob topilmadi", http.StatusNotFound)
 }
 
 func main() {
 	err := loadBooks()
 	if err != nil {
-		log.Fatal("Error loading books:", err)
+		fmt.Println("Kitoblar yuklanmadi:", err)
+		return
 	}
 
-	http.HandleFunc("/books", getBooks)
-	http.HandleFunc("/book", getBook)
+	http.HandleFunc("/books", getAllBooks)
+	http.HandleFunc("/books/", getBook)
+	http.HandleFunc("/books/add", addBook)
+	http.HandleFunc("/books/update/", updateBook)
+	http.HandleFunc("/books/delete/", deleteBook)
 
-	fmt.Println("Server is running on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	fmt.Println("Server 8080 portda ishga tushirildi...")
+	err = http.ListenAndServe(":8080", nil)
+	if err != nil {
+		fmt.Println("Server ishlashda xatolik:", err)
+	}
 }
